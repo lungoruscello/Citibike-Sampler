@@ -1,0 +1,276 @@
+"""
+sampling.py
+
+Provides utilities to produce a single pandas DataFrame containing a random
+sub-set of Citi Bike records from several consecutive months or years.
+
+The full Citi Bike data is massive, with millions of rides recorded each
+single month -- and recorded in a large number of smaller data shards.
+Having access to a random sample of the Citi Bike data from several years
+in one single dataframe can greatly simplify data analysis, including the
+development and testing of ML models.
+"""
+
+import logging
+import random
+from concurrent.futures import as_completed, ProcessPoolExecutor
+from dataclasses import dataclass
+from datetime import datetime
+from hashlib import sha256
+from typing import Any, Optional
+
+import pandas as pd
+from tqdm.auto import tqdm
+
+from citibike_sampler.config import *
+from citibike_sampler.misc import normalise_time_range
+from citibike_sampler.download import (
+    is_month_fully_cached,
+    glob_monthly_csv_paths,
+    fetch_data,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SampingResult:
+    """
+    Represents the outcome of a CSV-level sampling operation.
+
+    Attributes
+    ----------
+    success : bool
+        Indicates whether the operation completed successfully.
+    num_orig: int
+        Number of records in the original trip-data shards. None if not applicable.
+    df : Any or None
+        Dataframe with sampled records. None if not applicable.
+    error_msg : str or None
+        The message of an exception raised during the operation. None if not applicable.
+    """
+
+    success: bool
+    num_orig: Optional[int] = None
+    df: Optional[Any] = None
+    error_msg: Optional[str] = None
+
+
+class ProcessingError(Exception):
+    """Raised when one or more trip-data shards fail to process properly."""
+
+    pass
+
+
+def thinned_dataset(
+    start,
+    end,
+    fraction=0.01,
+    seed=None,
+    max_workers=None,
+    verbose=True
+
+):
+    """
+    Load and sample Citi Bike data from a specified time range.
+
+    Triggers automatic downloads of Citi Bike data for months/years that
+    have not yet been locally cached.
+
+    Parameters
+    ----------
+    start : int or str
+        Start year or start month of the sampling period (inclusive).
+        Accepts formats like 2020, "2020-05", or "2020-5".
+    end : int or str
+        End year or end month of the sampling period (inclusive).
+        Accepts formats like 2020, "2020-05", or "2020-5".
+    fraction : float, optional
+        Fraction of records to retain (between 0 and 1). Default is 0.01 or 1 percent.
+    seed : int, optional
+        Random seed for reproducibility. Default is None.
+    max_workers : int, optional
+        Max number of threads to use for parallel data ingestion and sampling.
+        Default is None, in which case the concurrency level is set to whatever
+        `citibike_sampler.config.get_max_concurrency()` returns.
+    verbose : bool, default=True
+        If False, all progress bars and print outputs are silenced.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A concatenated DataFrame with trip records that were randomly sampled
+        from all data shards during the requested time range.
+    """
+    if not (0 < fraction < 1):
+        raise ValueError("Sampling fraction must be between 0 and 1")
+
+    (start_y, start_m), (end_y, end_m) = normalise_time_range(start, end)
+    _validate_thinning_range(start_y, start_m, end_y, end_m)
+
+    max_workers = get_max_concurrency() if max_workers is None else max_workers
+
+    if seed is not None:
+        random.seed(seed)
+
+    # trigger data downloads from S3 where needed
+    all_months = _month_list(start_y, start_m, end_y, end_m)
+    _ensure_data_available(all_months)
+
+    # find local paths to all trip-data shards
+    csv_paths = []
+    for year, month in all_months:
+        assert is_month_fully_cached(year, month)
+        month_paths = glob_monthly_csv_paths(year, month)
+        csv_paths.extend(month_paths)
+    assert csv_paths
+
+    # parallel sampling from trip-data shards
+    sampled_frames = []
+    errors = []
+    num_all_records = 0
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(_process_csv, p, i, fraction, seed)
+            for i, p in enumerate(csv_paths)
+        ]
+        pbar = tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc="Sampling from trip-data shards",
+            disable=not verbose
+        )
+        for future in pbar:
+            result = future.result()
+            if result.success:
+                num_all_records += result.num_orig
+                if result.df is not None:
+                    sampled_frames.append(result.df)
+            else:
+                errors.append(result.error_msg)
+
+    # issue warning and return empty frame if no job returned any samples
+    if not sampled_frames:
+        logger.warning(
+            "All sampled dataframes were empty. Unless your sampling "
+            "fraction was very low, the cached data may be corrupted."
+        )
+        return pd.DataFrame()
+
+    # raise an informative error if any job failed
+    # > will include the full error message and path to
+    #   the offending CSV file for each failed job
+    if errors := [e for e in errors if e is not None]:
+        formatted = '\n'.join(f"- {e} [" for e in errors)
+        raise ProcessingError(
+            f"{len(errors)} Sampling operation(s) failed. Details:\n{formatted}"
+        )
+
+    # clean up
+    concat_df = pd.concat(sampled_frames, ignore_index=True)
+    concat_df.sort_values("started_at", inplace=True)
+
+    if verbose:
+        frac = len(concat_df) / num_all_records * 100
+        print(f"Sampled records: {len(concat_df):,}")
+        print(f"Empirical sampling fraction: {frac:.2f}%")
+
+    return concat_df
+
+
+def _process_csv(csv_path, job_id, sampling_fraction, master_seed):
+    try:
+        # ingest trip data
+        df = pd.read_csv(
+            csv_path,
+            low_memory=False,
+            parse_dates=["started_at", "ended_at"],
+        )
+        num_orig = len(df)
+        if df.empty:
+            return SampingResult(True, num_orig=0, df=None)
+
+        # sample records at ramdom
+        seed = _job_seed(master_seed, job_id)
+        sampled_df = df.sample(
+            frac=sampling_fraction,
+            random_state=seed,
+            replace=False
+        )
+
+        sampled_df.sort_values("started_at", inplace=True)
+        if sampled_df.empty:
+            sampled_df = None
+        return SampingResult(True, num_orig=num_orig, df=sampled_df)
+
+    except Exception as e:
+        msg = (
+            f"{type(e).__name__}: {e}\n[Error occurred "
+            f"during processing of file at {csv_path}]"
+        )
+        return SampingResult(False, num_orig=None, df=None, error_msg=msg)
+
+
+def _ensure_data_available(months):
+    """
+    Ensure all specified (year, month) pairs have cached data.
+
+    For legacy years (up to LAST_BUNDLED_YEAR), triggers full-year
+    downloads. For newer months, triggers per-month downloads.
+
+    Parameters
+    ----------
+    months : list of tuple of (int, int)
+        List of (year, month) pairs to check and download if missing.
+    """
+    legacy_years = set()
+    new_months = []
+
+    for year, month in months:
+        if not is_month_fully_cached(year, month):
+            if year <= LAST_BUNDLED_YEAR:
+                legacy_years.add(year)
+            else:
+                new_months.append((year, month))
+
+    for year in legacy_years:
+        fetch_data(year)
+
+    for year, month in new_months:
+        fetch_data(year, month)
+
+
+def _month_list(start_y, start_m, end_y, end_m):
+    start = datetime(start_y, start_m, 1)
+    end = datetime(end_y, end_m, 1)
+
+    months = []
+    current = start
+    while current <= end:
+        months.append((current.year, current.month))
+        if current.month == 12:
+            current = datetime(current.year + 1, 1, 1)
+        else:
+            current = datetime(current.year, current.month + 1, 1)
+
+    return months
+
+
+def _job_seed(master_seed, idx):
+    cryptic_str = f"xx_{idx}_yy_{master_seed}_zz_{idx}"
+    digest = sha256(cryptic_str.encode()).hexdigest()
+    int_64 = int(digest[:16], 16)  # max. 20 digits
+    int_trunc = int(str(int_64)[:9])  # pandas has upper limit on seeds
+    return int_trunc
+
+
+def _validate_thinning_range(start_y, start_m, end_y, end_m):
+    if not (FIRST_SUPPORTED_YEAR <= start_y <= NOW_YEAR):
+        raise ValueError(f"Start year must be >= {FIRST_SUPPORTED_YEAR} and <= {NOW_YEAR}.")
+    if not (1 <= start_m <= 12) or not (1 <= end_m <= 12):
+        raise ValueError("Months must be between 1 and 12.")
+    if (end_y, end_m) < (start_y, start_m):
+        raise ValueError("End date must not be earlier than start date.")
+    if end_y == NOW_YEAR and end_m >= NOW_MONTH:
+        raise ValueError("Cannot sample from the current or future months.")
