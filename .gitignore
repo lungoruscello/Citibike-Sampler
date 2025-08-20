@@ -1,5 +1,7 @@
 examples/
 assets/test_data
+assets/sampled
+main.py
 
 # *****************
 # GitHub default for Python projects

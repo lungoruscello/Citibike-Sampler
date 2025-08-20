@@ -15,7 +15,6 @@ import logging
 import random
 from concurrent.futures import as_completed, ProcessPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime
 from hashlib import sha256
 from typing import Any, Optional
 
@@ -23,12 +22,8 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from citibike_sampler.config import *
-from citibike_sampler.misc import normalise_time_range
-from citibike_sampler.download import (
-    is_month_fully_cached,
-    glob_monthly_csv_paths,
-    fetch_data,
-)
+from citibike_sampler.download import glob_csv_paths, fetch
+from citibike_sampler.misc import normalise_monthly_time_range
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +31,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SampingResult:
     """
-    Represents the outcome of a CSV-level sampling operation.
+    Represents the outcome of a  sampling operation at the trip-data shard level.
 
     Attributes
     ----------
@@ -62,29 +57,39 @@ class ProcessingError(Exception):
     pass
 
 
-def thinned_dataset(
-    start,
-    end,
-    fraction=0.01,
-    seed=None,
-    max_workers=None,
-    verbose=True
+def sample(
+        start,
+        end=None,
+        fraction=0.01,
+        seed=None,
+        max_workers=None,
+        verbose=True
 
 ):
     """
-    Load and sample Citi Bike data from a specified time range.
+    Load and sample Citi Bike data from a specified time range. # TODO: Make more descriptive
 
     Triggers automatic downloads of Citi Bike data for months/years that
     have not yet been locally cached.
 
     Parameters
     ----------
-    start : int or str
-        Start year or start month of the sampling period (inclusive).
-        Accepts formats like 2020, "2020-05", or "2020-5".
-    end : int or str
-        End year or end month of the sampling period (inclusive).
-        Accepts formats like 2020, "2020-05", or "2020-5".
+    start : str or int
+        The start year or month of the sampling period (inclusive).
+        Accepted formats:
+        - Integer: 2020 → (2020, 1)
+        - String: "2020" → (2020, 1)
+        - String: "2020-5" → (2020, 5)
+        - String: "2020-05" → (2020, 5)
+    end : str or int, optional
+        The end year or month of the sampling period (inclusive).
+        Accepted formats:
+        - Integer: 2020 → (2020, 12)
+        - String: "2020" → (2020, 1)
+        - String: "2020-5" → (2020, 5)
+        - String: "2020-05" → (2020, 5)
+        If `None` is provided, data will be sampled only for the single year
+        or single month specified in `start`.
     fraction : float, optional
         Fraction of records to retain (between 0 and 1). Default is 0.01 or 1 percent.
     seed : int, optional
@@ -105,30 +110,20 @@ def thinned_dataset(
     if not (0 < fraction < 1):
         raise ValueError("Sampling fraction must be between 0 and 1")
 
-    (start_y, start_m), (end_y, end_m) = normalise_time_range(start, end)
-    _validate_thinning_range(start_y, start_m, end_y, end_m)
-
+    start, end = normalise_monthly_time_range(start, end)
     max_workers = get_max_concurrency() if max_workers is None else max_workers
 
     if seed is not None:
         random.seed(seed)
 
-    # trigger data downloads from S3 where needed
-    all_months = _month_list(start_y, start_m, end_y, end_m)
-    _ensure_data_available(all_months)
+    # trigger Citi Bike data downloads from S3 when needed
+    fetch(start, end, skip_if_exists=True)  # will also validate the cache
 
-    # find local paths to all trip-data shards
-    csv_paths = []
-    for year, month in all_months:
-        assert is_month_fully_cached(year, month)
-        month_paths = glob_monthly_csv_paths(year, month)
-        csv_paths.extend(month_paths)
-    assert csv_paths
-
-    # parallel sampling from trip-data shards
+    # sample in parallel from trip-data shards
     sampled_frames = []
     errors = []
     num_all_records = 0
+    csv_paths = glob_csv_paths(start, end)
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [
@@ -212,65 +207,9 @@ def _process_csv(csv_path, job_id, sampling_fraction, master_seed):
         return SampingResult(False, num_orig=None, df=None, error_msg=msg)
 
 
-def _ensure_data_available(months):
-    """
-    Ensure all specified (year, month) pairs have cached data.
-
-    For legacy years (up to LAST_BUNDLED_YEAR), triggers full-year
-    downloads. For newer months, triggers per-month downloads.
-
-    Parameters
-    ----------
-    months : list of tuple of (int, int)
-        List of (year, month) pairs to check and download if missing.
-    """
-    legacy_years = set()
-    new_months = []
-
-    for year, month in months:
-        if not is_month_fully_cached(year, month):
-            if year <= LAST_BUNDLED_YEAR:
-                legacy_years.add(year)
-            else:
-                new_months.append((year, month))
-
-    for year in legacy_years:
-        fetch_data(year)
-
-    for year, month in new_months:
-        fetch_data(year, month)
-
-
-def _month_list(start_y, start_m, end_y, end_m):
-    start = datetime(start_y, start_m, 1)
-    end = datetime(end_y, end_m, 1)
-
-    months = []
-    current = start
-    while current <= end:
-        months.append((current.year, current.month))
-        if current.month == 12:
-            current = datetime(current.year + 1, 1, 1)
-        else:
-            current = datetime(current.year, current.month + 1, 1)
-
-    return months
-
-
 def _job_seed(master_seed, idx):
     cryptic_str = f"xx_{idx}_yy_{master_seed}_zz_{idx}"
     digest = sha256(cryptic_str.encode()).hexdigest()
     int_64 = int(digest[:16], 16)  # max. 20 digits
     int_trunc = int(str(int_64)[:9])  # pandas has upper limit on seeds
     return int_trunc
-
-
-def _validate_thinning_range(start_y, start_m, end_y, end_m):
-    if not (FIRST_SUPPORTED_YEAR <= start_y <= NOW_YEAR):
-        raise ValueError(f"Start year must be >= {FIRST_SUPPORTED_YEAR} and <= {NOW_YEAR}.")
-    if not (1 <= start_m <= 12) or not (1 <= end_m <= 12):
-        raise ValueError("Months must be between 1 and 12.")
-    if (end_y, end_m) < (start_y, start_m):
-        raise ValueError("End date must not be earlier than start date.")
-    if end_y == NOW_YEAR and end_m >= NOW_MONTH:
-        raise ValueError("Cannot sample from the current or future months.")

@@ -3,21 +3,22 @@ download.py
 
 This module provides logic to download, unpack, and cache Citi Bike data
 from AWS, where archives of trip records are hosted in a public S3 bucket.
-The module supports legacy annual data archives for years before 2024 and
-modern monthly archives (2024+).
+The module supports legacy annual data archives, which were used before 2024,
+and the more recent monthly data archives (2024+).
 
 Extracted trip-data is stored in a local cache, with `.manifest.json` files
 used to track completeness and avoid redundant downloads.
 """
-
 import json
 import shutil
+from datetime import datetime
 from zipfile import ZipFile
 
 import requests
 from tqdm.auto import tqdm, trange
 
 from citibike_sampler.config import *
+from citibike_sampler.misc import month_list, normalise_monthly_time_range
 
 BASE_URL = "https://s3.amazonaws.com/tripdata"
 
@@ -34,7 +35,81 @@ class ExtractionError(Exception):
     pass
 
 
-def fetch_data(
+def fetch(
+        start,
+        end=None,
+        skip_if_exists=True,
+        remove_archives=True,
+        verbose=True
+):
+    """
+    Download and extract archived trip-data from NYC's S3 bucket for a
+    certain time range.
+
+    This method is a wrapper around `_fetch_one`.
+
+    Parameters
+    ----------
+    start : str, int, or tuple[int, int]
+        The start year or month of the download period (inclusive).
+        Accepted formats:
+        - Tuple: (2020, 1)
+        - Integer: 2020 → (2020, 1)
+        - String: "2020" → (2020, 1)
+        - String: "2020-5" → (2020, 5)
+        - String: "2020-05" → (2020, 5)
+    end : str, int, or tuple[int, int], optional
+        The end year or month of the download period (inclusive).
+        Accepted formats:
+        - Tuple: (2020, 12)
+        - Integer: 2020 → (2020, 12)
+        - String: "2020" → (2020, 1)
+        - String: "2020-5" → (2020, 5)
+        - String: "2020-05" → (2020, 5)
+        If `None` is provided, data will be downloaded only for the single year
+        or single month specified in `start`.
+    skip_if_exists : bool, default=True
+        If True, skip downloading and extraction if cached data already exists and is complete.
+    remove_archives : bool, default=True
+        Whether to delete downloaded `.zip` files and temporary directories after extraction.
+        Setting this to False may help during debugging,
+    verbose : bool, default=True
+        If False, all progress bars are silenced.
+
+    Raises
+    ------
+    ValueError
+        If the requested time range for the download is improper.
+    """
+    start, end = normalise_monthly_time_range(start, end)
+    _validate_download_range(start, end)
+
+    all_months = month_list(start, end)
+
+    seen_legacy_years = []
+    for year, month in all_months:
+        if year in seen_legacy_years:
+            # do not download legacy year twice,
+            # even if `skip_if_exists` is False
+            continue
+
+        _fetch_one(
+            year,
+            month if year >= 2024 else None,
+            skip_if_exists=skip_if_exists,
+            remove_archives=remove_archives,
+            verbose=verbose,
+        )
+
+        if year < 2024:
+            seen_legacy_years.append(year)
+
+    # validate the local cache
+    for year, month in all_months:
+        is_month_fully_cached(year, month)
+
+
+def _fetch_one(
         year,
         month=None,
         skip_if_exists=True,
@@ -46,8 +121,8 @@ def fetch_data(
     single year or month.
 
     Depending on the year, this function fetches either a single monthly
-    archive (=modern data) or an annual bundle (=legacy data). Extracted CSV
-    files holding individual trip-data shards are stored in a local cache,
+    archive (=modern data) or a single annual bundle (=legacy data). Extracted
+    CSV files holding individual trip-data shards are stored in a local cache,
     along with a manifest file for subsequent cache validation.
 
     Parameters
@@ -67,10 +142,8 @@ def fetch_data(
     Raises
     ------
     RuntimeError
-        If a download or extraction fails, or the time arguments are invalid.
+        If a download or extraction fails.
     """
-    _validate_download_time(year, month)
-
     try:
         if year <= LAST_BUNDLED_YEAR:
             assert month is None
@@ -130,7 +203,32 @@ def month_bundle_cache_dir(year, month):
     return year_bundle_cache_dir(year) / f"{year}{month:02d}"
 
 
-def glob_monthly_csv_paths(year, month, to_str=False):
+def glob_csv_paths(start, end, return_strings=False):
+    """
+    Return a list of all cached trip-data shards for a given time range.
+
+    Parameters
+    ----------
+    start : tuple[int, int]
+        (start_year, start_month) for the data.
+    end : tuple[int, int]
+        (end_year, end_month) for the data.
+    return_strings : bool, default=False
+        If True, return file paths as strings; otherwise return Path objects.
+
+    Returns
+    -------
+    list
+        List of CSV file paths (or strings) for the time range.
+    """
+    csv_paths = []
+    for year, month in month_list(start, end):
+        month_paths = glob_csv_paths_month(year, month, return_strings)
+        csv_paths.extend(month_paths)
+    return csv_paths
+
+
+def glob_csv_paths_month(year, month, return_strings=False):
     """
     Return a list of all cached trip-data shards for a given month.
 
@@ -140,13 +238,13 @@ def glob_monthly_csv_paths(year, month, to_str=False):
         The year of the data.
     month : int
         The month-of-year of the data (1–12).
-    to_str : bool, default=False
+    return_strings : bool, default=False
         If True, return file paths as strings; otherwise return Path objects.
 
     Returns
     -------
     list
-        List of CSV file paths (or strings).
+        List of CSV file paths (or strings) for the month.
     """
     dir_ = month_bundle_cache_dir(year, month)
     if not dir_.is_dir():
@@ -155,7 +253,7 @@ def glob_monthly_csv_paths(year, month, to_str=False):
     csv_prefix = _month_bundle_name(year, month)
     csv_paths = sorted(dir_.glob(f'{csv_prefix}_*.csv'))
 
-    if to_str:
+    if return_strings:
         # make JSON-serialisable
         csv_paths = [str(x) for x in csv_paths]
 
@@ -179,14 +277,13 @@ def is_month_fully_cached(year, month):
     bool
     """
     try:
-        manifest_data = _read_month_manifest(year, month)
+        csv_paths = _read_month_manifest(year, month)
     except FileNotFoundError:
         # without manifest, we cannot tell
         return False
     else:
-        expected = manifest_data["csv_files"]
-        actual = glob_monthly_csv_paths(year, month, to_str=True)
-        missing = set(expected) - set(actual)
+        actual = glob_csv_paths_month(year, month, return_strings=False)
+        missing = set(csv_paths) - set(actual)
 
         if missing:
             return False
@@ -479,7 +576,8 @@ def _extract_monthly_csv_files(year, month):
 
 def _write_month_manifest(year, month):
     """
-    Create a JSON file listing all trip-data shards for a given month.
+    Create a JSON file listing the file names of all trip-data shards
+    for a given month.
 
     When executing this function after a fresh data download, it produces
     a manifest file that can later be used for cache validation.
@@ -493,10 +591,10 @@ def _write_month_manifest(year, month):
     """
 
     manifest_path = _manifest_path(year, month)
-    csv_paths = glob_monthly_csv_paths(year, month, to_str=True)
+    full_csv_paths = glob_csv_paths_month(year, month, return_strings=False)
 
     manifest_data = {
-        "csv_files": csv_paths,
+        "csv_names": [x.name for x in full_csv_paths]
     }
 
     with open(manifest_path, "w") as f:
@@ -512,12 +610,19 @@ def _month_bundle_name(year, month):
     return f'{ym}-citibike-tripdata'
 
 
-def _read_month_manifest(year, month):
+def _read_month_manifest(year, month, return_full_paths=True):
     manifest_path = _manifest_path(year, month)
+    cache_dir = manifest_path.parent
 
     with open(manifest_path, "r") as f:
         manifest_data = json.load(f)
-    return manifest_data
+
+    if not return_full_paths:
+        raise NotImplementedError()
+
+    full_csv_paths = [cache_dir / x for x in manifest_data['csv_names']]
+
+    return full_csv_paths
 
 
 def _manifest_path(year, month):
@@ -541,46 +646,52 @@ def _build_s3_url(year, month=None):
     return f"{BASE_URL}/{fname}.zip"
 
 
-def _validate_download_time(year, month):
-    # check year in range
-    if year < FIRST_SUPPORTED_YEAR:
-        raise RuntimeError(
-            f"Citi Bike data is only available from {FIRST_SUPPORTED_YEAR} "
-            f"onwards. You requested year {year}."
+def _validate_download_range(start, end):
+    # use datetime to implicitly validate month format
+    start = datetime(*start, day=1)
+    end = datetime(*end, day=1)
+
+    if start > end:
+        raise ValueError(f"Start date cannot be after end date.")
+
+    # check years in range
+    if start.year < FIRST_SUPPORTED_YEAR:
+        raise ValueError(
+            f"I can only download Citi Bike data from {FIRST_SUPPORTED_YEAR} "
+            f"onwards. You requested start year {start.year}."
         )
-    elif year > NOW_YEAR:
-        raise RuntimeError(f"Requested year {year} is in the future.")
+    elif start.year > NOW_YEAR:
+        raise ValueError(f"Requested start year {start.year} is in the future.")
 
-    # check month in range
-    if month is not None:
-        msg = "`month` must be an integer between 1 and 12."
-        if not isinstance(month, int):
-            raise RuntimeError(msg)
-        if month < 1 or month > 12:
-            raise RuntimeError(msg)
+    if end.year > NOW_YEAR:
+        raise ValueError(f"Requested end year {end.year} is in the future.")
 
-        if year == NOW_YEAR:
-            if month >= NOW_MONTH:
-                raise RuntimeError(
-                    f"Can only download data for months in the past. "
-                    f"You requested {year}-{month}."
-                )
+    if start.year == NOW_YEAR:
+        if start.month >= NOW_MONTH:
+            raise ValueError(
+                f"Can only download data for months in the past. "
+                f"You requested start date {start.strftime('%Y-%m')}."
+            )
+
+    if end.year == NOW_YEAR:
+        if end.month >= NOW_MONTH:
+            raise ValueError(
+                f"Can only download data for months in the past. "
+                f"You requested end date {end.strftime('%Y-%m')}."
+            )
 
     # check year-month combination
-    if year <= LAST_BUNDLED_YEAR:
-        if month is not None:
-            raise RuntimeError(
-                f"Isolated monthly downloads are only possible from "
-                f"{LAST_BUNDLED_YEAR + 1} onwards. Before that, you "
-                f"can only request an entire year at once (legacy "
-                f"data format)."
-            )
-    else:
-        if year == NOW_YEAR and month is None:
-            raise RuntimeError(
-                f"Please specify a month when downloading data "
-                f"for the current year."
-            )
+    msg = (
+        "Before 2024, you can only download full years, not "
+        "isolated months (legacy data format)"
+    )
+    if start.year <= LAST_BUNDLED_YEAR:
+        if start.month != 1:
+            raise ValueError(msg)
+
+    if end.year <= LAST_BUNDLED_YEAR:
+        if end.month != 12:
+            raise ValueError(msg)
 
 
 def _remove_cached_year_bundle(year):
