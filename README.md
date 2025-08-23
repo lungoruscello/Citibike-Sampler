@@ -1,68 +1,93 @@
-# citibike_sampler
+# CitibikeSampler
 
-*A lightweight command-line tool to download and sample NYC Citi Bike trip-data.*  
+*A lightweight Python tool to download, ingest, and sample trip-data from NYC's Citi Bike network.*  
 
 ---
 
-## Why Use This?
+## Why use this?
+Data from the ['Citi Bike' system in NYC](https://citibikenyc.com/system-data) captures real-world patterns of urban mobility at very high resolution. 
+As such, the data is widely used in research and practical applications.
 
-The full [Citi Bike dataset](https://citibikenyc.com/system-data) contains **millions of trip records per month**.
-[Public data archives](https://s3.amazonaws.com/tripdata/index.html) are also organised differently over time and 
-analysts looking to work with trip records for several years will find them organised in hundreds of compressed CSV 
-files. Working with this raw data can be time-consuming and resource-intensive.
+However, working with the [raw source data](https://s3.amazonaws.com/tripdata/index.html) can be tedious. In a single year, the Citi Bike system records tens of 
+millions of rides, equating to several GB worth of data. Furthermore, historical trip records are spread over hundreds 
+of CSV files that use an inconsistent archive layout over time (annual bundles before 2024, monthly archives 
+after).
 
-This tool helps you:
-- Download only the months or yeats you care about
-- Extract a **random sample of trip data across multiple months or years**
-- Output the result as a **single, clean DataFrame or file** for easy use in data analysis or machine learning workflows
+**CitibikeSampler** streamlines your workflow by providing:
+
+* a convenient **data downloader** with consistent local caching;
+* a **data loader** for accessing the full trip records; and
+* a **random sampler** to draw representative subsets of the full Citi Bike dataset spanning multiple months
+or years. 
+
+Random sampling allows you to quickly explore multi-year trends in the data, without having to load hundreds of millions 
+of records into memory.
 
 ---
 
 ## Installation
 
-Installation is best done using [`pipx`](https://pipx.pypa.io/stable/). 
-This allows you to run the script as a command-line tool without polluting your global Python environment or 
-having to manage virtual environments manually.
+### pip
+**CitibikeSampler** is available on [PyPI](https://pypi.org/project/CitibikeSampler/) and can be
+installed using `pip`:  
+
+```bash
+pip install citibike_sampler
+```
+
+### pipx (for CLI use)
+
+If you only need data sampling from the command-line, installation is best done using 
+[`pipx`](https://pipx.pypa.io/stable/):
 
 ```bash
 pipx install git+https://github.com/lungoruscello/citibike_sampler.git
 ```
-
 ---
 
-## Example Usage 
+  
+## Usage
 
-```bash
-# Download trip data from June 2024 to June 2025 
-cbike download --year 2023 --month 3
+### Python API
 
-# Sample 1% of trips and save to CSV
-cbike sample --start 2022-01 --end 2022-12 --fraction 0.01 --output sample.csv
+```python
+from citibike_sampler import sample, load_all, get_cache_dir
+
+# Randomly sample 1% of all trip records from the first half of 2025.
+# (Will automatically download data from AWS if not already cached.)
+sample_df = sample(start='2025-1', end='2025-6', fraction=0.01, seed=42)
+
+# Plot daily aggregates of sampled trips (assumes matplotlib is available)
+sample_df.set_index('ended_at').resample('1D').ride_id.count().plot()
+
+# Load the full dataset (be careful: millions of rides per month!)
+full_df = load_all(start='2025-1', end='2025-6') 
+
+print(len(sample_df) / len(full_df))  # check the sampling fraction
+
+print(get_cache_dir())  # inspect the local cache location  
 ```
 
----
 
-## Pre-sampled data
 
-If you are just looking to explore or prototype with Citi Bike data, you also use the pre-sampled dataset
-included in this repository.
+### Command Line
 
-Specifically, [`citibike_202001-202506_sampled_0.001.parquet`](citibike_202001-202506_sampled_0.001.parquet) (≈12 MB compressed). 
-random sample of **0.1% of all Citi Bike trip records from Jan 2020 to June 2025** has been precomputed and is available in this repository under 
+Generate a random sample directly from the terminal:
+```bash
+cbike_sampler --start 2025-1 --end 2025-6 --fraction 0.01 --seed 42 --output sampled.csv
+```
 
-This file includes:
-- Cleaned, standardized column names
-- All trips across all months in a single file
-- CSV format (gzip-compressed)
-
-Trip data is provided by Citi Bike NYC under the [Open Data Commons Public Domain Dedication and License (PDDL)](https://opendatacommons.org/licenses/pddl/1-0/).
+This will create a *sampled.csv* containing roughly 1% of all trip records from the first half of 2025. To store the 
+sampling result as a Feather or Parquet file, simply change the suffix of the output filename accordingly (e.g., 
+*sampled.parquet*)
 
 ## Requirements
 
 * Python 3.9 or higher
+* requests
 * pandas
 * tqdm
-* pyarrow
+* pyarrow (optional, for Parquet/Feather export)
 
 ## Licence
 
