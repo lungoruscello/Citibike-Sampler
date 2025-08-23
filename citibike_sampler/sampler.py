@@ -1,8 +1,8 @@
 """
-sampling.py
+sampler.py
 
-Provides utilities to produce a single pandas DataFrame containing a random
-sub-set of Citi Bike records from several consecutive months or years.
+Provides logic to produce a single pandas DataFrame containing a random
+sample of Citi Bike records for periods spanning several months or years.
 
 The full Citi Bike data is massive, with millions of rides recorded each
 single month -- and recorded in a large number of smaller data shards.
@@ -22,8 +22,9 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from citibike_sampler.config import *
-from citibike_sampler.download import glob_csv_paths, fetch
-from citibike_sampler.misc import normalise_monthly_time_range
+from citibike_sampler.downloader import glob_csv_paths, download
+from citibike_sampler.loader import _load_csv_shard
+from citibike_sampler.misc import normalise_time_range
 
 logger = logging.getLogger(__name__)
 
@@ -67,23 +68,26 @@ def sample(
 
 ):
     """
-    Load and sample Citi Bike data from a specified time range. # TODO: Make more descriptive
+    Randomly sample a fraction of all Citi Bike trip records for a
+    specified time period and return the result as one DataFrame.
 
     Triggers automatic downloads of Citi Bike data for months/years that
     have not yet been locally cached.
 
     Parameters
     ----------
-    start : str or int
+    start : str, int or tuple[int, int]
         The start year or month of the sampling period (inclusive).
         Accepted formats:
+        - Tuple: (2020, 1)
         - Integer: 2020 → (2020, 1)
         - String: "2020" → (2020, 1)
         - String: "2020-5" → (2020, 5)
         - String: "2020-05" → (2020, 5)
-    end : str or int, optional
+    end : str, int or tuple[int, int], optional
         The end year or month of the sampling period (inclusive).
         Accepted formats:
+        - Tuple: (2020, 12)
         - Integer: 2020 → (2020, 12)
         - String: "2020" → (2020, 1)
         - String: "2020-5" → (2020, 5)
@@ -110,14 +114,14 @@ def sample(
     if not (0 < fraction < 1):
         raise ValueError("Sampling fraction must be between 0 and 1")
 
-    start, end = normalise_monthly_time_range(start, end)
+    start, end = normalise_time_range(start, end)
     max_workers = get_max_concurrency() if max_workers is None else max_workers
 
     if seed is not None:
         random.seed(seed)
 
     # trigger Citi Bike data downloads from S3 when needed
-    fetch(start, end, skip_if_exists=True)  # will also validate the cache
+    download(start, end, skip_if_exists=True, warn=False)  # will also validate the cache
 
     # sample in parallel from trip-data shards
     sampled_frames = []
@@ -177,16 +181,13 @@ def sample(
 def _process_csv(csv_path, job_id, sampling_fraction, master_seed):
     try:
         # ingest trip data
-        df = pd.read_csv(
-            csv_path,
-            low_memory=False,
-            parse_dates=["started_at", "ended_at"],
-        )
+        df = _load_csv_shard(csv_path)
+
         num_orig = len(df)
         if df.empty:
             return SampingResult(True, num_orig=0, df=None)
 
-        # sample records at ramdom
+        # sample records at random
         seed = _job_seed(master_seed, job_id)
         sampled_df = df.sample(
             frac=sampling_fraction,

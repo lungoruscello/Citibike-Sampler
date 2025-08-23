@@ -10,7 +10,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from .sampling import sample
+from .sampler import sample
 
 ROOT_DIR = Path(__file__).parent
 

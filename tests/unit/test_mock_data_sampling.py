@@ -3,24 +3,24 @@ Tests the data sampling logic, based on mock Citi Bike data.
 (See `test_utils.generate_mock_data` for details)
 """
 
-from unittest import mock
 import logging
-import numpy as np
+from unittest import mock
+
 import pandas as pd
 
 from tests.test_utils import switched_cache_dir, mock_download
 
 
 def test_derived_seeds():
-    from citibike_sampler.sampling import _job_seed
+    from citibike_sampler.sampler import _job_seed
 
     assert _job_seed(1, 0) != _job_seed(0, 1) != _job_seed(1, 1)
     assert _job_seed(23, 5) == _job_seed(23, 5)
 
 
-@mock.patch("citibike_sampler.download._download_archive", side_effect=mock_download)
+@mock.patch("citibike_sampler.downloader._download_archive", side_effect=mock_download)
 def test_data_sampling(mocked_download):
-    from citibike_sampler.sampling import sample
+    from citibike_sampler.sampler import sample
 
     with switched_cache_dir("sampling_test"):
         shared_args = dict(
@@ -37,9 +37,9 @@ def test_data_sampling(mocked_download):
     assert not _are_frames_identical(df1, df3)  # different seeds
 
 
-@mock.patch("citibike_sampler.download._download_archive", side_effect=mock_download)
+@mock.patch("citibike_sampler.downloader._download_archive", side_effect=mock_download)
 def test_empty_samples_triggers_warning(mocked_download, caplog):
-    from citibike_sampler.sampling import sample
+    from citibike_sampler.sampler import sample
 
     with switched_cache_dir("sampling_test"):
         with caplog.at_level(logging.WARNING):
@@ -60,7 +60,7 @@ def _assert_no_duplicates(df):
 def _are_frames_identical(df_a, df_b):
     try:
         for var in ["ride_id", "started_at", "ended_at"]:
-            assert np.all(df_a[var].values == df_b[var].values)
+            assert (df_a[var].values != df_b[var].values).sum() == 0
             # TODO: Figure out why `df1.equals(df2)` fails on identical frames
     except AssertionError:
         return False

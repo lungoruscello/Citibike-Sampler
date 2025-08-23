@@ -1,5 +1,5 @@
 """
-End-to-end tests for full Citi Bike data fetch and cache validation.
+End-to-end tests for real Citi Bike data download and cache validation.
 """
 
 import pytest
@@ -8,18 +8,19 @@ from tests.test_utils import switched_cache_dir
 
 
 @pytest.mark.e2e
-def test_fetch_2022_data(monkeypatch):
-    from citibike_sampler.download import _fetch_one, _is_year_fully_cached
+def test_real_2022_download(monkeypatch):
+    from citibike_sampler.downloader import download, _is_year_fully_cached
 
     with switched_cache_dir('e2e_test'):
-        _fetch_one(2022)
+        download(2022)
         assert _is_year_fully_cached(2022)
 
 
 @pytest.mark.e2e
-def test_fetch_2024_data(monkeypatch):
-    from citibike_sampler.download import _fetch_one, _is_year_fully_cached
+def test_real_2024_download(monkeypatch):
+    from citibike_sampler.downloader import download, _is_year_fully_cached
 
     with switched_cache_dir('e2e_test'):
-        _fetch_one(2024)
+        download('2024-1')
+        download('2024-2', '2024-12')
         assert _is_year_fully_cached(2024)

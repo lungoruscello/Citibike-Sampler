@@ -1,5 +1,5 @@
 """
-download.py
+downloader.py
 
 This module provides logic to download, unpack, and cache Citi Bike data
 from AWS, where archives of trip records are hosted in a public S3 bucket.
@@ -7,9 +7,12 @@ The module supports legacy annual data archives, which were used before 2024,
 and the more recent monthly data archives (2024+).
 
 Extracted trip-data is stored in a local cache, with `.manifest.json` files
-used to track completeness and avoid redundant downloads.
+used to track completeness and avoid redundant downloads. Unlike data archives
+hosted on AWS, the local cache uses a consistent layout over time, based on
+individual monthly files both before and after 2024.
 """
 import json
+import logging
 import shutil
 from datetime import datetime
 from zipfile import ZipFile
@@ -18,9 +21,11 @@ import requests
 from tqdm.auto import tqdm, trange
 
 from citibike_sampler.config import *
-from citibike_sampler.misc import month_list, normalise_monthly_time_range
+from citibike_sampler.misc import month_list, normalise_time_range
 
 BASE_URL = "https://s3.amazonaws.com/tripdata"
+
+logger = logging.getLogger(__name__)
 
 
 class DownloadError(Exception):
@@ -35,25 +40,28 @@ class ExtractionError(Exception):
     pass
 
 
-def fetch(
+def download(
         start,
         end=None,
         skip_if_exists=True,
         remove_archives=True,
-        verbose=True
+        verbose=True,
+        warn=True
 ):
     """
     Download and extract archived trip-data from NYC's S3 bucket for a
-    certain time range.
+    given time range.
 
-    This method is a wrapper around `_fetch_one`.
+    Citi Bike trip data is hosted in large annual bundles before 2024, making
+    isolated monthly downloads impossible. This method will download full
+    annual data bundles whenever necessary.
 
     Parameters
     ----------
     start : str, int, or tuple[int, int]
         The start year or month of the download period (inclusive).
         Accepted formats:
-        - Tuple: (2020, 1)
+        - Tuple: (2020, 5)
         - Integer: 2020 → (2020, 1)
         - String: "2020" → (2020, 1)
         - String: "2020-5" → (2020, 5)
@@ -75,14 +83,36 @@ def fetch(
         Setting this to False may help during debugging,
     verbose : bool, default=True
         If False, all progress bars are silenced.
+    warn : bool, default=True
+        If True, a warning is logged when requesting a start month other than January or end
+        month other than December in years before 2024.
 
     Raises
     ------
     ValueError
-        If the requested time range for the download is improper.
+        If the requested download time range is improper.
     """
-    start, end = normalise_monthly_time_range(start, end)
+    start, end = normalise_time_range(start, end)
     _validate_download_range(start, end)
+
+    msg = (
+        "I can only download full years of trip-data from AWS before 2024. "
+        "I will download annual data archives wherever needed."
+    )
+
+    # set start month to January for legacy years <2024
+    if start[0] <= LAST_BUNDLED_YEAR:
+        if start[1] != 1:
+            start = (start[0], 1)
+            if warn:
+                logger.warning(msg)
+
+    # set end month to December for legacy years <2024
+    if end[0] <= LAST_BUNDLED_YEAR:
+        if end[1] != 12:
+            end = (end[0], 12)
+            if warn:
+                logger.warning(msg)
 
     all_months = month_list(start, end)
 
@@ -93,7 +123,7 @@ def fetch(
             # even if `skip_if_exists` is False
             continue
 
-        _fetch_one(
+        _download_one(
             year,
             month if year >= 2024 else None,
             skip_if_exists=skip_if_exists,
@@ -109,7 +139,7 @@ def fetch(
         is_month_fully_cached(year, month)
 
 
-def _fetch_one(
+def _download_one(
         year,
         month=None,
         skip_if_exists=True,
@@ -147,14 +177,14 @@ def _fetch_one(
     try:
         if year <= LAST_BUNDLED_YEAR:
             assert month is None
-            _fetch_legacy_year(year, skip_if_exists, verbose)
+            _download_legacy_year(year, skip_if_exists, verbose)
         else:
             if year == NOW_YEAR and month is None:
                 assert month is not None
 
             months = range(1, 13) if month is None else [month]
             for month in months:
-                _fetch_new_month(year, month, skip_if_exists, verbose)
+                _download_new_month(year, month, skip_if_exists, verbose)
 
     except Exception as e:
         if remove_archives:
@@ -331,9 +361,9 @@ def purge_cache(dry_run=True):
     }
 
 
-def _fetch_legacy_year(year, skip_if_exists=True, verbose=True):
+def _download_legacy_year(year, skip_if_exists=True, verbose=True):
     """
-    Fetch and extract trip-data for one legacy year (pre-2024).
+    Download and extract trip-data for one legacy year (pre-2024).
 
     Parameters
     ----------
@@ -364,9 +394,9 @@ def _fetch_legacy_year(year, skip_if_exists=True, verbose=True):
         _extract_monthly_csv_files(year, month)
 
 
-def _fetch_new_month(year, month, skip_if_exists=True, verbose=True):
+def _download_new_month(year, month, skip_if_exists=True, verbose=True):
     """
-    Fetch and extract modern trip-data for one month (2024+).
+    Download and extract modern trip-data for one month (2024+).
 
     Parameters
     ----------
@@ -679,19 +709,6 @@ def _validate_download_range(start, end):
                 f"Can only download data for months in the past. "
                 f"You requested end date {end.strftime('%Y-%m')}."
             )
-
-    # check year-month combination
-    msg = (
-        "Before 2024, you can only download full years, not "
-        "isolated months (legacy data format)"
-    )
-    if start.year <= LAST_BUNDLED_YEAR:
-        if start.month != 1:
-            raise ValueError(msg)
-
-    if end.year <= LAST_BUNDLED_YEAR:
-        if end.month != 12:
-            raise ValueError(msg)
 
 
 def _remove_cached_year_bundle(year):

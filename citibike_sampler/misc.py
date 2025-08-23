@@ -1,7 +1,7 @@
 import re
 
 
-def normalise_monthly_time_range(start, end=None):
+def normalise_time_range(start, end=None):
     """
     Normalise flexible time range inputs (for either data download or sampling)
     into ((start_year, start_month), (end_year, end_month)) tuples.

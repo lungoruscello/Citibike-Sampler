@@ -84,7 +84,7 @@ def mock_download(year, month=None, verbose=None):
         If the expected mock archive zip file does not exist.
     """
     from citibike_sampler.config import get_cache_dir
-    from citibike_sampler.download import _year_bundle_name, _month_bundle_name  # noqa
+    from citibike_sampler.downloader import _year_bundle_name, _month_bundle_name  # noqa
 
     cache_dir = get_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
