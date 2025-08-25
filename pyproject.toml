@@ -18,7 +18,7 @@ build = [
 ]
 
 [project.scripts]
-cbike = "citibike_sampler.cli:main"
+cbike_sampler = "citibike_sampler.cli:main"
 
 [tool.setuptools]
 packages = ["citibike_sampler"]
