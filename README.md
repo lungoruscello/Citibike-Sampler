@@ -1,4 +1,4 @@
-# CitibikeSampler
+# Citibike-Sampler
 
 *A Python tool to facilitate work with data from NYC's Citi Bike network.*  
 
@@ -13,7 +13,7 @@ millions of bike rides, equating to several GB worth of data. Furthermore, histo
 of CSV files that use an inconsistent archive layout over time (annual bundles before 2024, monthly archives 
 after).
 
-**CitibikeSampler** streamlines your workflow by providing:
+**Citibike-Sampler** streamlines your workflow by providing:
 
 * a convenient **data downloader** with consistent local caching;
 * a **data loader** for accessing the full trip records; and
@@ -28,7 +28,7 @@ hundreds of millions of records into memory.
 ## Installation
 
 ### pip
-**CitibikeSampler** is available on [PyPI](https://pypi.org/project/CitibikeSampler/) and can be
+**Citibike-Sampler** is available on [PyPI](https://pypi.org/project/citibike-sampler/) and can be
 installed using `pip`:  
 
 ```bash
@@ -41,7 +41,7 @@ If you only need data sampling from the command-line, installation is best done 
 [`pipx`](https://pipx.pypa.io/stable/):
 
 ```bash
-pipx install git+https://github.com/lungoruscello/CitibikeSampler.git
+pipx install git+https://github.com/lungoruscello/Citibike-Sampler.git
 ```
 ---
 
@@ -90,4 +90,4 @@ sampling result as a Feather or Parquet file, simply change the suffix of the ou
 
 ## Licence
 
-MIT Licence. See [LICENSE.txt](https://github.com/lungoruscello/CitibikeSampler/blob/master/LICENSE.txt) for details.
+MIT Licence. See [LICENSE.txt](https://github.com/lungoruscello/Citibike-Sampler/blob/master/LICENSE.txt) for details.
