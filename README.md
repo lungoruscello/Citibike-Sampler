@@ -1,6 +1,6 @@
 # CitibikeSampler
 
-*A lightweight Python tool to download, ingest, and sample trip-data from NYC's Citi Bike network.*  
+*A lightweight Python tool to streamline your work with data from NYC's Citi Bike network.*  
 
 ---
 
@@ -9,7 +9,7 @@ Data from the ['Citi Bike' system in NYC](https://citibikenyc.com/system-data) c
 As such, the data is widely used in research and practical applications.
 
 However, working with the [raw source data](https://s3.amazonaws.com/tripdata/index.html) can be tedious. In a single year, the Citi Bike system records tens of 
-millions of rides, equating to several GB worth of data. Furthermore, historical trip records are spread over hundreds 
+millions of bike rides, equating to several GB worth of data. Furthermore, historical trip records are spread over hundreds 
 of CSV files that use an inconsistent archive layout over time (annual bundles before 2024, monthly archives 
 after).
 
@@ -17,11 +17,11 @@ after).
 
 * a convenient **data downloader** with consistent local caching;
 * a **data loader** for accessing the full trip records; and
-* a **random sampler** to draw representative subsets of the full Citi Bike dataset spanning multiple months
+* a **random sampler** to draw representative subsets of the full Citi Bike data spanning multiple months
 or years. 
 
-Random sampling allows you to quickly explore multi-year trends in the data, without having to load hundreds of millions 
-of records into memory.
+Random sampling allows you to quickly explore multi-year trends in the Citi Bike data, without having to load 
+hundreds of millions of records into memory.
 
 ---
 
@@ -68,18 +68,17 @@ print(len(sample_df) / len(full_df))  # check the sampling fraction
 print(get_cache_dir())  # inspect the local cache location  
 ```
 
+### CLI
 
+Generate a random sample of Citi Bike data directly from the terminal:
 
-### Command Line
-
-Generate a random sample directly from the terminal:
 ```bash
 cbike_sampler --start 2025-1 --end 2025-6 --fraction 0.01 --seed 42 --output sampled.csv
 ```
 
-This will create a *sampled.csv* containing roughly 1% of all trip records from the first half of 2025. To store the 
+This will create a *sampled.csv* file containing roughly 1% of all trip records from the first half of 2025. To store the 
 sampling result as a Feather or Parquet file, simply change the suffix of the output filename accordingly (e.g., 
-*sampled.parquet*)
+*sampled.parquet*).
 
 ## Requirements
 
