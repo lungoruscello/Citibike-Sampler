@@ -1,6 +1,6 @@
 [project]
 name = "citibike-sampler"
-version = "0.0.1"
+version = "0.1"
 description = "Python tool to download, ingest, and sample trip-data from NYC's Citi Bike network"
 requires-python = ">=3.9"
 license = {text = "MIT License"}
