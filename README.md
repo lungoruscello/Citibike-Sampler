@@ -2,7 +2,13 @@
 
 *A Python tool to facilitate work with data from NYC's Citi Bike network.*  
 
----
+<!-- 
+Keywords: Citi Bike data, Python package, download and combine Citi Bike records
+-->
+
+[![PyPI Latest Release](https://img.shields.io/pypi/v/citibike-sampler.svg)](https://pypi.org/project/citibike-sampler/)
+[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/lungoruscello/Citibike-Sampler/blob/master/LICENSE.txt)
+
 
 ## Why use this?
 Data from the ['Citi Bike' system in NYC](https://citibikenyc.com/system-data) captures real-world patterns of urban mobility at very high resolution. 
@@ -23,7 +29,6 @@ or years.
 Random sampling allows you to quickly explore multi-year trends in the Citi Bike data, without having to load 
 hundreds of millions of records into memory.
 
----
 
 ## Installation
 
@@ -43,8 +48,6 @@ If you only need data sampling from the command-line, installation is best done 
 ```bash
 pipx install git+https://github.com/lungoruscello/Citibike-Sampler.git
 ```
----
-
   
 ## Usage
 
