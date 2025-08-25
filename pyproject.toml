@@ -3,7 +3,7 @@ name = "citibike-sampler"
 version = "0.0.1"
 description = "Python tool to download, ingest, and sample trip-data from NYC's Citi Bike network"
 requires-python = ">=3.9"
-license = "MIT License"
+license = {text = "MIT License"}
 readme = "README.md"
 authors = [
   { name="S. Langenbach", email="lungoruscello@gmail.com" }
@@ -28,5 +28,5 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project.urls]
-Source = "https://github.com/lungoruscello/citibike_sampler"
+Source = "https://github.com/lungoruscello/CitibikeSampler"
     

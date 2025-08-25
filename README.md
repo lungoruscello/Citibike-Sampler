@@ -32,7 +32,7 @@ hundreds of millions of records into memory.
 installed using `pip`:  
 
 ```bash
-pip install citibike_sampler
+pip install citibike-sampler
 ```
 
 ### pipx (for CLI use)
@@ -41,7 +41,7 @@ If you only need data sampling from the command-line, installation is best done 
 [`pipx`](https://pipx.pypa.io/stable/):
 
 ```bash
-pipx install git+https://github.com/lungoruscello/citibike_sampler.git
+pipx install git+https://github.com/lungoruscello/CitibikeSampler.git
 ```
 ---
 
@@ -90,4 +90,4 @@ sampling result as a Feather or Parquet file, simply change the suffix of the ou
 
 ## Licence
 
-MIT Licence. See [LICENSE.txt](https://github.com/lungoruscello/citibike_sampler/blob/master/LICENSE.txt) for details.
+MIT Licence. See [LICENSE.txt](https://github.com/lungoruscello/CitibikeSampler/blob/master/LICENSE.txt) for details.
