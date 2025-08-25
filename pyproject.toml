@@ -1,29 +1,27 @@
 [project]
-name = "citibike_sampler"
+name = "citibike-sampler"
 version = "0.0.1"
-description = "Lightweight tool to download, ingest, and sample trip-data from NYC's Citi Bike network"
-authors = [{name = "S. Langenbach"}]
+description = "Python tool to download, ingest, and sample trip-data from NYC's Citi Bike network"
+requires-python = ">=3.9"
+license = "MIT License"
+readme = "README.md"
+authors = [
+  { name="S. Langenbach", email="lungoruscello@gmail.com" }
+]
 dependencies = ["pandas", "tqdm", "requests", "pyarrow"]
 
 [project.optional-dependencies]
 build = [
     "twine>=4.0.2",
     "build",
-    "wheel"
-]
-
-requires-python = ">=3.9"
-license = {text = "MIT"}
-authors = [
-  { name="S. Langenbach", email="lungoruscello@gmail.com" }
+    "wheel",
 ]
 
 [project.scripts]
-cbike = "citibike_utils.cli:main"
+cbike = "citibike_sampler.cli:main"
 
 [tool.setuptools]
 packages = ["citibike_sampler"]
-include-package-data = true
 
 [build-system]
 requires = ["setuptools>=61", "wheel"]

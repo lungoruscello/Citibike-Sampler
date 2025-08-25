@@ -1,6 +1,6 @@
 # CitibikeSampler
 
-*A lightweight Python tool to streamline your work with data from NYC's Citi Bike network.*  
+*A Python tool to facilitate work with data from NYC's Citi Bike network.*  
 
 ---
 
